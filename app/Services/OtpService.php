@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Otp;
 use App\Mail\OtpMail;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
 class OtpService
@@ -13,7 +14,7 @@ class OtpService
         // Invalidate old OTPs
         Otp::where('email', $email)->where('type', $type)->where('is_used', false)->update(['is_used' => true]);
 
-        $otp = str_pad(random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
+        $otp = str_pad((string) random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
 
         Otp::create([
             'email' => $email,
@@ -22,7 +23,17 @@ class OtpService
             'expires_at' => now()->addMinutes(10),
         ]);
 
-        Mail::to($email)->send(new OtpMail($otp, $type));
+        try {
+            Mail::to($email)->send(new OtpMail($otp, $type));
+        } catch (\Throwable $e) {
+            // Never fail registration/login just because SMTP is down.
+            Log::error('OTP mail failed', [
+                'email' => $email,
+                'type' => $type,
+                'otp' => $otp,
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         return $otp;
     }

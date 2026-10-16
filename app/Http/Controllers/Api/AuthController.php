@@ -32,12 +32,18 @@ class AuthController extends Controller
             'role' => 'user',
         ]);
 
-        $this->otpService->generate($user->email, 'email_verification');
+        $otp = $this->otpService->generate($user->email, 'email_verification');
+
+        $data = ['email' => $user->email, 'customer_id' => $user->customer_id];
+        // Temporary fallback while SMTP is misconfigured — remove after mail works.
+        if (filter_var(env('OTP_RETURN_IN_RESPONSE', false), FILTER_VALIDATE_BOOLEAN)) {
+            $data['otp'] = $otp;
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'Registration successful. Please verify your email.',
-            'data' => ['email' => $user->email, 'customer_id' => $user->customer_id],
+            'data' => $data,
         ], 201);
     }
 
@@ -88,13 +94,17 @@ class AuthController extends Controller
         }
 
         if (!$user->is_email_verified) {
-            $this->otpService->generate($user->email, 'email_verification');
-            return response()->json([
+            $otp = $this->otpService->generate($user->email, 'email_verification');
+            $payload = [
                 'success' => false,
                 'message' => 'Email not verified. OTP sent.',
                 'requires_verification' => true,
                 'email' => $user->email,
-            ], 403);
+            ];
+            if (filter_var(env('OTP_RETURN_IN_RESPONSE', false), FILTER_VALIDATE_BOOLEAN)) {
+                $payload['otp'] = $otp;
+            }
+            return response()->json($payload, 403);
         }
 
         if (!$user->is_active) {
