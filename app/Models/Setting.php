@@ -35,8 +35,13 @@ class Setting extends Model
     public static function bounds(): array
     {
         return [
-            'min' => (float) static::get('min_deposit', 100),
+            'min' => (float) static::get('min_deposit', 10),
             'max' => (float) static::get('max_deposit', 500000),
         ];
+    }
+
+    public static function minWithdrawal(): float
+    {
+        return (float) static::get('min_withdrawal', 100);
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Deposit;
+use App\Models\Setting;
 use App\Models\User;
 use App\Models\Withdrawal;
 use Illuminate\Validation\ValidationException;
@@ -19,6 +20,13 @@ class WithdrawalService
         // Check if withdrawal already exists for this deposit
         if ($deposit->withdrawal()->exists()) {
             throw ValidationException::withMessages(['deposit' => 'Withdrawal already requested for this deposit.']);
+        }
+
+        $minWithdrawal = Setting::minWithdrawal();
+        if ((float) $deposit->withdrawal_amount < $minWithdrawal) {
+            throw ValidationException::withMessages([
+                'amount' => "Minimum withdrawal is ₹{$minWithdrawal}.",
+            ]);
         }
 
         // Verify user has sufficient wallet balance

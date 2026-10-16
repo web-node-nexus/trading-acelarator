@@ -13,8 +13,9 @@ class SettingController extends Controller
         $settings = [
             'deduction_percent' => Setting::get('deduction_percent', 20),
             'payout_multiplier' => Setting::get('payout_multiplier', 2),
-            'min_deposit' => Setting::get('min_deposit', 100),
+            'min_deposit' => Setting::get('min_deposit', 10),
             'max_deposit' => Setting::get('max_deposit', 500000),
+            'min_withdrawal' => Setting::get('min_withdrawal', 100),
             'support_email' => Setting::get('support_email', ''),
             'support_phone' => Setting::get('support_phone', ''),
             'payment_note' => Setting::get('payment_note', ''),
@@ -34,6 +35,7 @@ class SettingController extends Controller
             'payout_multiplier' => 'required|numeric|min:1|max:10',
             'min_deposit' => 'required|numeric|min:1',
             'max_deposit' => 'required|numeric|gt:min_deposit',
+            'min_withdrawal' => 'required|numeric|min:1',
             'support_email' => 'nullable|email',
             'support_phone' => 'nullable|string|max:20',
             'payment_note' => 'nullable|string|max:500',

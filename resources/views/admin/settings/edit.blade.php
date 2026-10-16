@@ -29,6 +29,10 @@
                         <input type="number" step="1" name="max_deposit" class="form-control" value="{{ old('max_deposit', $settings['max_deposit']) }}" required>
                     </div>
                     <div class="form-group">
+                        <label class="form-label">Minimum withdrawal (₹)</label>
+                        <input type="number" step="1" name="min_withdrawal" class="form-control" value="{{ old('min_withdrawal', $settings['min_withdrawal']) }}" required>
+                    </div>
+                    <div class="form-group">
                         <label class="form-label">Support email</label>
                         <input type="email" name="support_email" class="form-control" value="{{ old('support_email', $settings['support_email']) }}">
                     </div>
