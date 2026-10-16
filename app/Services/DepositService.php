@@ -104,10 +104,21 @@ class DepositService
                 'description' => 'Trading Accelerator · Deposit ' . $deposit->txn_id,
                 'prefill' => [
                     'name' => $user->name,
-                    'email' => $user->email,
-                    'contact' => $user->phone ? preg_replace('/\D+/', '', $user->phone) : '',
+                    'email' => str_ends_with((string) $user->email, '@phone.tradingaccelerator.local')
+                        ? null
+                        : $user->email,
+                    'contact' => $user->phone
+                        ? substr(preg_replace('/\D+/', '', (string) $user->phone) ?? '', -10)
+                        : '',
+                    'method' => 'upi',
                 ],
                 'theme' => ['color' => '#0F766E'],
+                'method' => [
+                    'upi' => true,
+                    'card' => true,
+                    'netbanking' => true,
+                    'wallet' => true,
+                ],
             ],
         ];
     }
