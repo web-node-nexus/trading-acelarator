@@ -2,56 +2,32 @@
 
 namespace App\Services;
 
-use App\Models\Otp;
-use App\Mail\OtpMail;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
+use InvalidArgumentException;
+use RuntimeException;
 
+/**
+ * Phone OTP via 2factor.in SMS (replaces email OTP for app auth / withdrawals).
+ */
 class OtpService
 {
-    public function generate(string $email, string $type = 'email_verification'): string
+    public function __construct(private TwoFactorSmsService $twoFactor) {}
+
+    public function generateForPhone(string $phone): void
     {
-        // Invalidate old OTPs
-        Otp::where('email', $email)->where('type', $type)->where('is_used', false)->update(['is_used' => true]);
-
-        $otp = str_pad((string) random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
-
-        Otp::create([
-            'email' => $email,
-            'otp' => $otp,
-            'type' => $type,
-            'expires_at' => now()->addMinutes(10),
-        ]);
-
-        try {
-            Mail::to($email)->send(new OtpMail($otp, $type));
-        } catch (\Throwable $e) {
-            // Never fail registration/login just because SMTP is down.
-            Log::error('OTP mail failed', [
-                'email' => $email,
-                'type' => $type,
-                'otp' => $otp,
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        return $otp;
+        $this->twoFactor->sendOtp($phone);
     }
 
-    public function verify(string $email, string $otp, string $type = 'email_verification'): bool
+    public function verifyForPhone(string $phone, string $otp): bool
     {
-        $record = Otp::where('email', $email)
-            ->where('otp', $otp)
-            ->where('type', $type)
-            ->where('is_used', false)
-            ->latest()
-            ->first();
-
-        if (!$record || !$record->isValid()) {
+        try {
+            return $this->twoFactor->verifyOtp($phone, $otp);
+        } catch (InvalidArgumentException|RuntimeException $e) {
             return false;
         }
+    }
 
-        $record->update(['is_used' => true]);
-        return true;
+    public function normalizePhone(string $phone): string
+    {
+        return $this->twoFactor->toTenDigit($phone);
     }
 }

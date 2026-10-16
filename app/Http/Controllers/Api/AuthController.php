@@ -7,120 +7,155 @@ use App\Models\User;
 use App\Services\OtpService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\Rules\Password;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use InvalidArgumentException;
+use RuntimeException;
 
 class AuthController extends Controller
 {
     public function __construct(private OtpService $otpService) {}
 
-    public function register(Request $request): JsonResponse
+    /**
+     * Send SMS OTP to phone.
+     * Register: pass name. Login: phone only (user must already exist).
+     */
+    public function sendOtp(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'name' => 'required|string|max:100',
-            'email' => 'required|email|unique:users,email',
-            'phone' => 'nullable|string|max:15',
-            'password' => ['required', 'confirmed', Password::min(6)],
+            'phone' => 'required|string|max:20',
+            'name' => 'nullable|string|max:100',
+            'mode' => 'nullable|in:login,register',
         ]);
 
-        $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
-            'phone' => $validated['phone'] ?? null,
-            'password' => Hash::make($validated['password']),
-            'role' => 'user',
-        ]);
+        try {
+            $phone = $this->otpService->normalizePhone($validated['phone']);
+        } catch (InvalidArgumentException $e) {
+            throw ValidationException::withMessages(['phone' => $e->getMessage()]);
+        }
 
-        $otp = $this->otpService->generate($user->email, 'email_verification');
+        $mode = $validated['mode'] ?? ($validated['name'] ? 'register' : 'login');
+        $user = User::where('phone', $phone)->where('role', 'user')->first();
 
-        $data = ['email' => $user->email, 'customer_id' => $user->customer_id];
-        // Temporary fallback while SMTP is misconfigured — remove after mail works.
-        if (filter_var(env('OTP_RETURN_IN_RESPONSE', false), FILTER_VALIDATE_BOOLEAN)) {
-            $data['otp'] = $otp;
+        if ($mode === 'register') {
+            if (empty($validated['name'])) {
+                throw ValidationException::withMessages(['name' => 'Name is required to create an account.']);
+            }
+            if ($user) {
+                throw ValidationException::withMessages(['phone' => 'This number is already registered. Please sign in.']);
+            }
+            Cache::put($this->pendingKey($phone), [
+                'name' => trim($validated['name']),
+                'phone' => $phone,
+            ], now()->addMinutes(15));
+        } else {
+            if (!$user) {
+                throw ValidationException::withMessages(['phone' => 'No account found. Please create an account.']);
+            }
+            if (!$user->is_active) {
+                return response()->json(['success' => false, 'message' => 'Account is suspended. Contact admin.'], 403);
+            }
+        }
+
+        try {
+            $this->otpService->generateForPhone($phone);
+        } catch (RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 502);
         }
 
         return response()->json([
             'success' => true,
-            'message' => 'Registration successful. Please verify your email.',
-            'data' => $data,
-        ], 201);
+            'message' => 'OTP sent to your phone.',
+            'data' => [
+                'phone' => $phone,
+                'mode' => $mode,
+            ],
+        ]);
     }
 
+    /**
+     * Verify SMS OTP and issue a long-lived Sanctum token (until user logs out).
+     */
     public function verifyOtp(Request $request): JsonResponse
     {
-        $request->validate([
-            'email' => 'required|email',
-            'otp' => 'required|string|size:6',
-            'type' => 'required|in:email_verification,withdrawal',
+        $validated = $request->validate([
+            'phone' => 'required|string|max:20',
+            'otp' => 'required|string|min:4|max:8',
+            'name' => 'nullable|string|max:100',
+            'mode' => 'nullable|in:login,register',
         ]);
 
-        $verified = $this->otpService->verify($request->email, $request->otp, $request->type);
+        try {
+            $phone = $this->otpService->normalizePhone($validated['phone']);
+        } catch (InvalidArgumentException $e) {
+            throw ValidationException::withMessages(['phone' => $e->getMessage()]);
+        }
 
-        if (!$verified) {
+        if (!$this->otpService->verifyForPhone($phone, $validated['otp'])) {
             throw ValidationException::withMessages(['otp' => 'Invalid or expired OTP.']);
         }
 
-        if ($request->type === 'email_verification') {
-            User::where('email', $request->email)->update(['is_email_verified' => true]);
-        }
+        $mode = $validated['mode'] ?? 'login';
+        $user = User::where('phone', $phone)->where('role', 'user')->first();
 
-        return response()->json(['success' => true, 'message' => 'OTP verified successfully.']);
-    }
-
-    public function resendOtp(Request $request): JsonResponse
-    {
-        $request->validate([
-            'email' => 'required|email|exists:users,email',
-            'type' => 'required|in:email_verification,withdrawal',
-        ]);
-
-        $this->otpService->generate($request->email, $request->type);
-
-        return response()->json(['success' => true, 'message' => 'OTP sent to your email.']);
-    }
-
-    public function login(Request $request): JsonResponse
-    {
-        $request->validate([
-            'email' => 'required|email',
-            'password' => 'required|string',
-        ]);
-
-        $user = User::where('email', $request->email)->first();
-
-        if (!$user || !Hash::check($request->password, $user->password)) {
-            throw ValidationException::withMessages(['email' => 'Invalid credentials.']);
-        }
-
-        if (!$user->is_email_verified) {
-            $otp = $this->otpService->generate($user->email, 'email_verification');
-            $payload = [
-                'success' => false,
-                'message' => 'Email not verified. OTP sent.',
-                'requires_verification' => true,
-                'email' => $user->email,
-            ];
-            if (filter_var(env('OTP_RETURN_IN_RESPONSE', false), FILTER_VALIDATE_BOOLEAN)) {
-                $payload['otp'] = $otp;
+        if (!$user) {
+            $pending = Cache::pull($this->pendingKey($phone)) ?? [];
+            $name = trim((string) ($validated['name'] ?? $pending['name'] ?? ''));
+            if ($name === '') {
+                throw ValidationException::withMessages(['name' => 'Name is required to create an account.']);
             }
-            return response()->json($payload, 403);
+
+            $user = User::create([
+                'name' => $name,
+                'email' => $phone . '@phone.tradingaccelerator.local',
+                'phone' => $phone,
+                'password' => Hash::make(Str::random(40)),
+                'role' => 'user',
+                'is_email_verified' => true,
+                'is_active' => true,
+            ]);
+        } else {
+            if (!$user->is_active) {
+                return response()->json(['success' => false, 'message' => 'Account is suspended. Contact admin.'], 403);
+            }
+            if (!$user->is_email_verified) {
+                $user->update(['is_email_verified' => true]);
+            }
         }
 
-        if (!$user->is_active) {
-            return response()->json(['success' => false, 'message' => 'Account is suspended. Contact admin.'], 403);
-        }
-
+        // One active app session token; persists until explicit logout (sanctum expiration = null).
+        $user->tokens()->where('name', 'cashflow_app')->delete();
         $token = $user->createToken('cashflow_app')->plainTextToken;
 
         return response()->json([
             'success' => true,
-            'message' => 'Login successful.',
+            'message' => $mode === 'register' ? 'Account created.' : 'Login successful.',
             'data' => [
                 'token' => $token,
-                'user' => $this->formatUser($user),
+                'user' => $this->formatUser($user->fresh()),
             ],
         ]);
+    }
+
+    public function resendOtp(Request $request): JsonResponse
+    {
+        return $this->sendOtp($request);
+    }
+
+    /** @deprecated Use sendOtp — kept for older clients */
+    public function register(Request $request): JsonResponse
+    {
+        $request->merge(['mode' => 'register']);
+        return $this->sendOtp($request);
+    }
+
+    /** @deprecated Use sendOtp — kept for older clients */
+    public function login(Request $request): JsonResponse
+    {
+        $request->merge(['mode' => 'login']);
+        return $this->sendOtp($request);
     }
 
     public function logout(Request $request): JsonResponse
@@ -135,6 +170,11 @@ class AuthController extends Controller
             'success' => true,
             'data' => $this->formatUser($request->user()),
         ]);
+    }
+
+    private function pendingKey(string $phone): string
+    {
+        return 'otp_register:' . $phone;
     }
 
     private function formatUser(User $user): array

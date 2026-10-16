@@ -19,15 +19,25 @@ class WithdrawalController extends Controller
 
     public function requestOtp(Request $request): JsonResponse
     {
-        $this->otpService->generate($request->user()->email, 'withdrawal');
-        return response()->json(['success' => true, 'message' => 'Withdrawal OTP sent to your email.']);
+        $phone = $request->user()->phone;
+        if (!$phone) {
+            return response()->json(['success' => false, 'message' => 'Add a phone number to your profile first.'], 422);
+        }
+
+        try {
+            $this->otpService->generateForPhone($phone);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 502);
+        }
+
+        return response()->json(['success' => true, 'message' => 'Withdrawal OTP sent to your phone.']);
     }
 
     public function store(Request $request): JsonResponse
     {
         $request->validate([
             'deposit_id' => 'required|exists:deposits,id',
-            'otp' => 'required|string|size:6',
+            'otp' => 'required|string|min:4|max:8',
             'bank_name' => 'nullable|string|max:100',
             'account_number' => 'nullable|string|max:30',
             'ifsc_code' => 'nullable|string|max:20',
@@ -35,9 +45,8 @@ class WithdrawalController extends Controller
             'upi_id' => 'nullable|string|max:100',
         ]);
 
-        // Verify OTP
-        $verified = $this->otpService->verify($request->user()->email, $request->otp, 'withdrawal');
-        if (!$verified) {
+        $phone = $request->user()->phone;
+        if (!$phone || !$this->otpService->verifyForPhone($phone, $request->otp)) {
             return response()->json(['success' => false, 'message' => 'Invalid or expired OTP.'], 422);
         }
 

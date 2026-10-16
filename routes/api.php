@@ -8,13 +8,15 @@ use Illuminate\Support\Facades\Route;
 
 Route::post('webhooks/razorpay', [DepositController::class, 'webhook']);
 
-// Public auth routes
+// Public auth routes (phone OTP via 2factor SMS — no password)
 Route::prefix('auth')->group(function () {
-    Route::post('register', [AuthController::class, 'register']);
-    Route::post('login', [AuthController::class, 'login']);
+    Route::post('send-otp', [AuthController::class, 'sendOtp']);
+    Route::post('register', [AuthController::class, 'register']); // alias → send-otp (register)
+    Route::post('login', [AuthController::class, 'login']);       // alias → send-otp (login)
     Route::post('verify-otp', [AuthController::class, 'verifyOtp']);
     Route::post('resend-otp', [AuthController::class, 'resendOtp']);
 });
+
 
 // Protected user routes
 Route::middleware(['auth:sanctum'])->group(function () {
