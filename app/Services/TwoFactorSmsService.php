@@ -27,16 +27,22 @@ class TwoFactorSmsService
 
         Log::info('2factor send OTP', [
             'phone' => $phone10,
-            'status' => $response->status(),
+            'http' => $response->status(),
             'body' => $body,
         ]);
 
-        if (!$response->successful() || strtoupper((string) ($body['Status'] ?? '')) !== 'Success') {
-            $msg = $body['Details'] ?? $body['message'] ?? 'Failed to send OTP SMS.';
-            throw new RuntimeException(is_string($msg) ? $msg : 'Failed to send OTP SMS.');
+        if ($this->isSuccess($response->status(), $body)) {
+            return $body;
         }
 
-        return $body;
+        $msg = $body['Details'] ?? $body['details'] ?? $body['message'] ?? 'Failed to send OTP SMS.';
+        // Don't surface raw session UUIDs as errors if Status parsing failed oddly.
+        if (is_string($msg) && preg_match('/^[a-f0-9-]{36}$/i', $msg)) {
+            // Treat as success: 2factor returns UUID session id in Details on success.
+            return $body + ['Status' => 'Success'];
+        }
+
+        throw new RuntimeException(is_string($msg) ? $msg : 'Failed to send OTP SMS.');
     }
 
     public function verifyOtp(string $phone, string $otp): bool
@@ -56,12 +62,31 @@ class TwoFactorSmsService
 
         Log::info('2factor verify OTP', [
             'phone' => $phone91,
-            'status' => $response->status(),
+            'http' => $response->status(),
             'body' => $body,
         ]);
 
-        return $response->successful()
-            && strtoupper((string) ($body['Status'] ?? '')) === 'Success';
+        return $this->isSuccess($response->status(), $body);
+    }
+
+    private function isSuccess(int $httpStatus, array $body): bool
+    {
+        if ($httpStatus < 200 || $httpStatus >= 300) {
+            return false;
+        }
+
+        $status = strtoupper((string) ($body['Status'] ?? $body['status'] ?? ''));
+        if ($status === 'SUCCESS') {
+            return true;
+        }
+
+        // Fallback: successful AUTOGEN responses put a session UUID in Details.
+        $details = $body['Details'] ?? $body['details'] ?? null;
+        if (is_string($details) && preg_match('/^[a-f0-9-]{36}$/i', $details)) {
+            return true;
+        }
+
+        return false;
     }
 
     public function toTenDigit(string $phone): string
